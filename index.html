@@ -38,7 +38,9 @@ input[type="range"]{width:100%;accent-color:#4f8ef7;cursor:pointer;}
 .single-result.on{display:flex;}
 .single-result canvas{max-width:100%;border-radius:4px;}
 .action-row{display:flex;gap:8px;width:100%;margin-top:10px;}
-.btn-dl,.btn-zpl{flex:1;padding:10px 6px;border-radius:10px;font-size:0.82rem;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;display:inline-block;transition:background .2s;}
+.btn-dl,.btn-zpl,.btn-print{flex:1;padding:10px 6px;border-radius:10px;font-size:0.82rem;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;display:inline-block;transition:background .2s;}
+.btn-print{border:1.5px solid rgba(34,197,94,0.55);background:transparent;color:#22c55e;}
+.btn-print:hover{background:rgba(34,197,94,0.1);}
 .btn-dl{border:1.5px solid rgba(79,142,247,0.55);background:transparent;color:#4f8ef7;}
 .btn-dl:hover{background:rgba(79,142,247,0.1);}
 .btn-zpl{border:1.5px solid rgba(168,85,247,0.55);background:transparent;color:#a855f7;}
@@ -114,8 +116,9 @@ input[type="range"]{width:100%;accent-color:#4f8ef7;cursor:pointer;}
     <div class="single-result" id="s-result">
       <canvas id="s-canvas"></canvas>
       <div class="action-row">
-        <a class="btn-dl" id="s-dl">⬇ Descargar PNG</a>
-        <button class="btn-zpl" id="s-zpl" onclick="copyZPL('bc')">⎙ Copiar ZPL Zebra</button>
+          <a class="btn-dl" id="s-dl">⬇ Descargar PNG</a>
+        <button class="btn-print" onclick="printZebraBC()">🖨 Enviar a Zebra</button>
+        <button class="btn-zpl" id="s-zpl" onclick="copyZPL('bc')">⎙ Copiar ZPL</button>
       </div>
     </div>
   </div>
@@ -178,7 +181,8 @@ input[type="range"]{width:100%;accent-color:#4f8ef7;cursor:pointer;}
       <canvas id="qs-canvas"></canvas>
       <div class="action-row">
         <a class="btn-dl" id="qs-dl">⬇ Descargar PNG</a>
-        <button class="btn-zpl" id="qs-zpl" onclick="copyZPL('qr')">⎙ Copiar ZPL Zebra</button>
+        <button class="btn-print" onclick="printZebraQR()">🖨 Enviar a Zebra</button>
+        <button class="btn-zpl" id="qs-zpl" onclick="copyZPL('qr')">⎙ Copiar ZPL</button>
       </div>
     </div>
   </div>
@@ -427,7 +431,48 @@ function makePreview(srcCanvas){
   return p;
 }
 
-// ── BC SINGLE ──
+// ── ZEBRA BROWSER PRINT ──
+let zebraPrinter = null;
+
+async function initZebraPrint(){
+  try {
+    const r = await fetch('http://localhost:9100/available', {method:'GET'});
+    const data = await r.json();
+    const printers = data.printer || [];
+    if(printers.length === 0){ alert('No se encontraron impresoras Zebra conectadas.'); return null; }
+    // Use first available printer
+    zebraPrinter = printers[0];
+    return zebraPrinter;
+  } catch(e) {
+    alert('No se puede conectar con Zebra Browser Print.\n\nAsegúrate de que está instalado y en ejecución.');
+    return null;
+  }
+}
+
+async function sendZPLtoPrinter(zpl){
+  let printer = zebraPrinter;
+  if(!printer) printer = await initZebraPrint();
+  if(!printer) return;
+  try {
+    await fetch('http://localhost:9100/write', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ device: printer, data: zpl })
+    });
+  } catch(e) {
+    alert('Error al enviar a la impresora: ' + e.message);
+  }
+}
+
+async function printZebraBC(){
+  if(!lastBC){ alert('Genera un código primero.'); return; }
+  await sendZPLtoPrinter(zplBarcode(lastBC));
+}
+
+async function printZebraQR(){
+  if(!lastQR){ alert('Genera un QR primero.'); return; }
+  await sendZPLtoPrinter(zplQR(lastQR));
+}
 document.getElementById('s-val').addEventListener('keydown',e=>{if(e.key==='Enter')genBCSingle();});
 async function genBCSingle(){
   const val=document.getElementById('s-val').value.trim();
@@ -439,7 +484,7 @@ async function genBCSingle(){
     disp.width=c.width; disp.height=c.height;
     disp.getContext('2d').drawImage(c,0,0);
     const dl=document.getElementById('s-dl');
-    dl.href=c.toDataURL('image/png'); dl.download=safeName(val)+'.png';
+    dl.href=canvasToBase64With203DPI(c); dl.download=safeName(val)+'.png';
     lastBC=val;
     document.getElementById('s-result').classList.add('on');
   }catch(e){err.textContent='Error al generar.';err.classList.add('on');}
@@ -458,7 +503,7 @@ async function genBCBatch(){
   for(const val of lines){
     try{
       const c=await bcLabelCanvas(val,lw,showTxt,bh,tsz);
-      const dataUrl=c.toDataURL('image/png');
+      const dataUrl=canvasToBase64With203DPI(c);
       bcBatchData.push({val,dataUrl});
       const prev=makePreview(c);
       const item=document.createElement('div'); item.className='list-item';
@@ -489,7 +534,7 @@ async function genQRSingle(){
   disp.width=c.width; disp.height=c.height;
   disp.getContext('2d').drawImage(c,0,0);
   const dl=document.getElementById('qs-dl');
-  dl.href=c.toDataURL('image/png'); dl.download=safeName(val)+'.png';
+  dl.href=canvasToBase64With203DPI(c); dl.download=safeName(val)+'.png';
   lastQR=val;
   document.getElementById('qs-result').classList.add('on');
 }
@@ -507,7 +552,7 @@ async function genQRBatch(){
   const tSzPx=+document.getElementById('qb-tsz').value;
   for(const val of lines){
     const c=await qrLabelCanvas(val,ecc,dark,light,qSzPct,tSzPx);
-    const dataUrl=c.toDataURL('image/png');
+    const dataUrl=canvasToBase64With203DPI(c);
     qrBatchData.push({val,dataUrl});
     const prev=makePreview(c);
     const item=document.createElement('div'); item.className='list-item';
